@@ -1,3 +1,20 @@
+# Auto-Deeplab (my notes)  
+
+```
+python deeplab/train.py --logtostderr --model_variant="nas_hnasnet" --train_logdir="/Users/lucyktan/Documents/models/research/deeplab/logs" --dataset="cityscapes" --train_crop_size="769,769" --min_scale_factor=1 --max_scale_factor=1 --base_learning_rate=0.05 --training_number_of_steps=500000 --fine_tune_batch_norm=False --atrous_rates=6 --atrous_rates=12 --atrous_rates=18 --dataset_dir="/Users/lucyktan/Documents/models/research/deeplab/datasets/cityscapes/tfrecord" --train_split="train_fine" --output_stride=8  
+
+INFO:tensorflow:Starting Session.
+I1126 23:41:12.041472 4624872896 learning.py:754] Starting Session.
+INFO:tensorflow:Saving checkpoint to path /Users/lucyktan/Documents/models/research/deeplab/logs/model.ckpt
+I1126 23:41:12.790501 123145422446592 supervisor.py:1117] Saving checkpoint to path /Users/lucyktan/Documents/models/research/deeplab/logs/model.ckpt
+INFO:tensorflow:Starting Queues.
+I1126 23:41:12.790615 4624872896 learning.py:768] Starting Queues.
+Fatal Python error: Segmentation fault
+
+Segmentation fault: 11
+```
+
+
 # DeepLab: Deep Labelling for Semantic Image Segmentation
 
 DeepLab is a state-of-art deep learning model for semantic image segmentation,
