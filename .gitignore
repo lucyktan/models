@@ -1,3 +1,7 @@
+# Deeplab
+research/deeplab/datasets/cityscapes/
+research/deeplab/logs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

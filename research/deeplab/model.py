@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-r"""Provides DeepLab model definition and helper functions.
+"""Provides DeepLab model definition and helper functions.
 
 DeepLab is a deep learning system for semantic image segmentation with
 the following features:

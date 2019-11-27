@@ -238,18 +238,18 @@ def _build_deeplab(iterator, outputs_to_num_classes, ignore_label):
       outputs_to_num_classes=outputs_to_num_classes,
       crop_size=[int(sz) for sz in FLAGS.train_crop_size],
       atrous_rates=FLAGS.atrous_rates,
-      output_stride=FLAGS.output_stride)
+      output_stride=FLAGS.output_stride) # Set to 8 to ensure tensor sizes match for concat op in model.py
 
   outputs_to_scales_to_logits = model.multi_scale_logits(
       samples[common.IMAGE],
       model_options=model_options,
-      image_pyramid=FLAGS.image_pyramid,
-      weight_decay=FLAGS.weight_decay,
+      image_pyramid=FLAGS.image_pyramid, # not used. only for multi-scale. we use single-scale
+      weight_decay=FLAGS.weight_decay, # use default in nas_network
       is_training=True,
-      fine_tune_batch_norm=FLAGS.fine_tune_batch_norm,
+      fine_tune_batch_norm=FLAGS.fine_tune_batch_norm, # define to False b/c we're using batch size 8
       nas_training_hyper_parameters={
-          'drop_path_keep_prob': FLAGS.drop_path_keep_prob,
-          'total_training_steps': FLAGS.training_number_of_steps,
+          'drop_path_keep_prob': FLAGS.drop_path_keep_prob, # set to 1.0 earlier, but not sure what it should be
+          'total_training_steps': FLAGS.training_number_of_steps, 
       })
 
   # Add name to graph node so we can add to summary.
@@ -264,15 +264,16 @@ def _build_deeplab(iterator, outputs_to_num_classes, ignore_label):
         num_classes,
         ignore_label,
         loss_weight=model_options.label_weights,
-        upsample_logits=FLAGS.upsample_logits,
-        hard_example_mining_step=FLAGS.hard_example_mining_step,
-        top_k_percent_pixels=FLAGS.top_k_percent_pixels,
+        upsample_logits=FLAGS.upsample_logits, # set to True earlier
+        hard_example_mining_step=FLAGS.hard_example_mining_step, # set to 0 earlier
+        top_k_percent_pixels=FLAGS.top_k_percent_pixels, # set to 1 earlier
         scope=output)
 
 
 def main(unused_argv):
   tf.logging.set_verbosity(tf.logging.INFO)
   # Set up deployment (i.e., multi-GPUs and/or multi-replicas).
+  # SKIP
   config = model_deploy.DeploymentConfig(
       num_clones=FLAGS.num_clones,
       clone_on_cpu=FLAGS.clone_on_cpu,
@@ -281,33 +282,34 @@ def main(unused_argv):
       num_ps_tasks=FLAGS.num_ps_tasks)
 
   # Split the batch across GPUs.
+  # SKIP
   assert FLAGS.train_batch_size % config.num_clones == 0, (
       'Training batch size not divisble by number of clones (GPUs).')
 
   clone_batch_size = FLAGS.train_batch_size // config.num_clones
 
-  tf.gfile.MakeDirs(FLAGS.train_logdir)
-  tf.logging.info('Training on %s set', FLAGS.train_split)
+  tf.gfile.MakeDirs(FLAGS.train_logdir) # need to define in command
+  tf.logging.info('Training on %s set', FLAGS.train_split) # defined earlier to "train"
 
   with tf.Graph().as_default() as graph:
     with tf.device(config.inputs_device()):
       dataset = data_generator.Dataset(
-          dataset_name=FLAGS.dataset,
-          split_name=FLAGS.train_split,
-          dataset_dir=FLAGS.dataset_dir,
-          batch_size=clone_batch_size,
-          crop_size=[int(sz) for sz in FLAGS.train_crop_size],
-          min_resize_value=FLAGS.min_resize_value,
-          max_resize_value=FLAGS.max_resize_value,
-          resize_factor=FLAGS.resize_factor,
-          min_scale_factor=FLAGS.min_scale_factor,
-          max_scale_factor=FLAGS.max_scale_factor,
-          scale_factor_step_size=FLAGS.scale_factor_step_size,
-          model_variant=FLAGS.model_variant,
-          num_readers=4,
+          dataset_name=FLAGS.dataset,  # options in _DATASETS_INFORMATION
+          split_name=FLAGS.train_split, # already defined
+          dataset_dir=FLAGS.dataset_dir, 
+          batch_size=clone_batch_size, # FLAGS.train_batch_size = 8 from earlier in this file
+          crop_size=[int(sz) for sz in FLAGS.train_crop_size], # need to define to "769,769"
+          min_resize_value=FLAGS.min_resize_value, # not resized for Cityscapes
+          max_resize_value=FLAGS.max_resize_value, # not resized for Cityscapes
+          resize_factor=FLAGS.resize_factor, # not resized for Cityscapes
+          min_scale_factor=FLAGS.min_scale_factor, # data augmentation not specified in paper
+          max_scale_factor=FLAGS.max_scale_factor, # data augmentation not specified in paper
+          scale_factor_step_size=FLAGS.scale_factor_step_size, # data augmentation not specified in paper
+          model_variant=FLAGS.model_variant, # define to "nas_hnasnet"
+          num_readers=4, # = 1 in data_generator.py
           is_training=True,
-          should_shuffle=True,
-          should_repeat=True)
+          should_shuffle=True, # shuffle dataset
+          should_repeat=True) # to have more than one epoch
 
     # Create the global step on the device storing the variables.
     with tf.device(config.variables_device()):
@@ -363,20 +365,20 @@ def main(unused_argv):
     # Build the optimizer based on the device specification.
     with tf.device(config.optimizer_device()):
       learning_rate = train_utils.get_model_learning_rate(
-          FLAGS.learning_policy,
-          FLAGS.base_learning_rate,
-          FLAGS.learning_rate_decay_step,
-          FLAGS.learning_rate_decay_factor,
-          FLAGS.training_number_of_steps,
-          FLAGS.learning_power,
-          FLAGS.slow_start_step,
-          FLAGS.slow_start_learning_rate,
-          decay_steps=FLAGS.decay_steps,
-          end_learning_rate=FLAGS.end_learning_rate)
+          FLAGS.learning_policy, # set to poly
+          FLAGS.base_learning_rate, # need to define to 0.05
+          FLAGS.learning_rate_decay_step, # not used in poly
+          FLAGS.learning_rate_decay_factor, # not used in poly
+          FLAGS.training_number_of_steps, # need to define to 500k, 1M, or 1.5M
+          FLAGS.learning_power, # set to 0.9 
+          FLAGS.slow_start_step, # set to 0
+          FLAGS.slow_start_learning_rate, # set to 1e-04
+          decay_steps=FLAGS.decay_steps, # set to 0.0
+          end_learning_rate=FLAGS.end_learning_rate) # set to 0.0
 
       summaries.add(tf.summary.scalar('learning_rate', learning_rate))
 
-      if FLAGS.optimizer == 'momentum':
+      if FLAGS.optimizer == 'momentum': # optimizer is set to momentum earlier
         optimizer = tf.train.MomentumOptimizer(learning_rate, FLAGS.momentum)
       elif FLAGS.optimizer == 'adam':
         optimizer = tf.train.AdamOptimizer(
@@ -384,7 +386,7 @@ def main(unused_argv):
       else:
         raise ValueError('Unknown optimizer')
 
-    if FLAGS.quantize_delay_step >= 0:
+    if FLAGS.quantize_delay_step >= 0: # not used, set to -1
       if FLAGS.num_clones > 1:
         raise ValueError('Quantization doesn\'t support multi-clone yet.')
       contrib_quantize.create_training_graph(
@@ -400,9 +402,9 @@ def main(unused_argv):
 
       # Modify the gradients for biases and last layer variables.
       last_layers = model.get_extra_layer_scopes(
-          FLAGS.last_layers_contain_logits_only)
+          FLAGS.last_layers_contain_logits_only) # set to False
       grad_mult = train_utils.get_model_gradient_multipliers(
-          last_layers, FLAGS.last_layer_gradient_multiplier)
+          last_layers, FLAGS.last_layer_gradient_multiplier) # not used
       if grad_mult:
         grads_and_vars = slim.learning.multiply_gradients(
             grads_and_vars, grad_mult)
@@ -439,7 +441,7 @@ def main(unused_argv):
         init_fn = train_utils.get_model_init_fn(
             FLAGS.train_logdir,
             FLAGS.tf_initial_checkpoint,
-            FLAGS.initialize_last_layer,
+            FLAGS.initialize_last_layer, # set to True earlier
             last_layers,
             ignore_missing_vars=True)
 
