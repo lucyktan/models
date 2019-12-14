@@ -157,6 +157,25 @@ def _get_image_data(path):
   return np.array(tf.gfile.FastGFile(path, 'rb').read())
 
 
+def _get_bytes_series(filenames):
+  """Gets the raw bytes of the given image paths.
+
+  Args:
+    filenames: List of paths to image files.
+
+  Returns:
+    A dask Series with the raw bytes of each image.
+  """
+  # Note that using np.bytes_ as the dtype results in it becoming S1, which
+  # would truncate it to only the first byte of each file.
+  byte_data_arrays = [
+      da.from_delayed(_get_image_data(path), dtype=object, shape=())
+      for path in filenames
+  ]
+  byte_data = da.stack(byte_data_arrays, axis=0)
+  return dd.from_dask_array(byte_data, columns='data')
+
+
 def _create_tf_record(record):
   """Creates a serialized TFRecord.
 
@@ -205,25 +224,16 @@ def _convert_dataset(dataset_split):
   image_file_array = np.char.array(
       list(map(lambda f: os.path.basename(f), image_files)))
   pattern = '%s.%s' % (_POSTFIX_MAP['image'], _DATA_FORMAT_MAP['image'])
+  bad_images = image_file_array[~image_file_array.endswith(pattern)]
+  if bad_images.size:
+    raise RuntimeError('Invalid image filenames: %s' % bad_images)
 
   # Remove the ending pattern to match the filename used in the original code.
   ddf = dd.from_array(image_file_array).str[:-len(pattern)].to_frame(
       name='filename')
 
-  # Note that using np.bytes_ as the dtype results in it becoming S1, which
-  # would truncate it to only the first byte of each file.
-  image_byte_data_arrays = [
-      da.from_delayed(_get_image_data(path), dtype=object, shape=())
-      for path in image_files
-  ]
-  label_byte_data_arrays = [
-      da.from_delayed(_get_image_data(path), dtype=object, shape=())
-      for path in label_files
-  ]
-  image_byte_data = da.stack(image_byte_data_arrays, axis=0)
-  label_byte_data = da.stack(label_byte_data_arrays, axis=0)
-  ddf['img_data'] = dd.from_dask_array(image_byte_data, columns='data')
-  ddf['seg_data'] = dd.from_dask_array(label_byte_data, columns='data')
+  ddf['img_data'] = _get_bytes_series(image_files)
+  ddf['seg_data'] = _get_bytes_series(label_files)
 
   ddf[['image_height', 'image_width']] = ddf['img_data'].map_partitions(
       _get_image_dimensions,
