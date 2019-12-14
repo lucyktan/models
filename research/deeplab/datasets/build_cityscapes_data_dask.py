@@ -191,15 +191,17 @@ def _create_tf_record(record):
 
 
 def _convert_to_record(df):
-  """Gets the serialized TFRecord.
+  """Gets the serialized TFRecord and if there are mismatched shapes.
 
   Args:
     df: Pandas DataFrame to create a TFRecord from.
 
   Returns:
-    A pandas Series containing the serialized TFRecord.
+    A pandas DataFrame containing the serialized TFRecord and an indicator for
+    if there are mismatched shapes.
   """
-  return df.apply(_create_tf_record, axis=1)
+  df['record'] = df.apply(_create_tf_record, axis=1)
+  return df[['record', 'mismatched_shapes']]
 
 
 def _convert_dataset(dataset_split):
@@ -251,7 +253,12 @@ def _convert_dataset(dataset_split):
           'width': np.int64
       })
 
-  records = ddf.map_partitions(_convert_to_record, meta=('record', object))
+  ddf['mismatched_shapes'] = ((ddf['image_width'] != ddf['label_width']) |
+                              (ddf['image_height'] != ddf['label_height']))
+
+  records = ddf.map_partitions(
+      _convert_to_record,
+      meta=[('record', object), ('mismatched_shapes', np.bool_)])
 
   for shard_id in range(_NUM_SHARDS):
     shard_filename = '%s-%05d-of-%05d.tfrecord' % (
@@ -261,11 +268,13 @@ def _convert_dataset(dataset_split):
       start_idx = shard_id * num_per_shard
       end_idx = min((shard_id + 1) * num_per_shard, num_images)
       cur_records = records.loc[start_idx:end_idx - 1].compute()
+      if cur_records['mismatched_shapes'].any():
+        raise RuntimeError('Shape mismatched between image and label.')
       for i in range(start_idx, end_idx):
         sys.stdout.write('\r>> Converting image %d/%d shard %d' % (
             i + 1, num_images, shard_id))
         sys.stdout.flush()
-        tfrecord_writer.write(cur_records[i])
+        tfrecord_writer.write(cur_records['record'][i])
     sys.stdout.write('\n')
     sys.stdout.flush()
 
