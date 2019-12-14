@@ -68,20 +68,14 @@ import math
 import os.path
 import re
 import sys
+import build_cityscapes_data_flags
 import build_data
 from six.moves import range
 import tensorflow as tf
 
 FLAGS = tf.app.flags.FLAGS
 
-tf.app.flags.DEFINE_string('cityscapes_root',
-                           './cityscapes',
-                           'Cityscapes dataset root folder.')
-
-tf.app.flags.DEFINE_string(
-    'output_dir',
-    './tfrecord',
-    'Path to save converted SSTable of TensorFlow examples.')
+tf.app.flags.adopt_module_key_flags(build_cityscapes_data_flags)
 
 
 _NUM_SHARDS = 10
