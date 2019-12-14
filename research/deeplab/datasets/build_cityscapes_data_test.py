@@ -7,6 +7,7 @@ import tempfile
 import tensorflow as tf
 
 import build_cityscapes_data
+import build_cityscapes_data_dask
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -54,6 +55,9 @@ def _copy_images(temp_dir):
 class BuildCityscapesDataTest(tf.test.TestCase):
   """Tests for converting Cityscapes images to TFRecords"""
 
+  # Allow subclasses to use different modules for conversion.
+  module = build_cityscapes_data
+
   def assertRecordEqual(self, expected, actual):
     """Asserts that two TFRecords are equivalent.
 
@@ -91,9 +95,14 @@ class BuildCityscapesDataTest(tf.test.TestCase):
       FLAGS.cityscapes_root = os.path.join(tmp, 'cityscapes')
       FLAGS.output_dir = os.path.join(tmp, 'tfrecord')
       os.makedirs(FLAGS.output_dir)
-      build_cityscapes_data._convert_dataset('train')
+      self.module._convert_dataset('train')
       self.assertAllRecordsEqual('./testdata/tfrecord/*.tfrecord',
                                  os.path.join(tmp, 'tfrecord/*.tfrecord'))
+
+
+class BuildCityscapesDataDaskTest(BuildCityscapesDataTest):
+  """Tests dask method of converting Cityscapes images to TFRecords"""
+  module = build_cityscapes_data_dask
 
 
 if __name__ == '__main__':
