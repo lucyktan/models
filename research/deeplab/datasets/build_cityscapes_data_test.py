@@ -8,6 +8,7 @@ import tensorflow as tf
 
 import build_cityscapes_data
 import build_cityscapes_data_dask
+import build_cityscapes_data_dask_imagesize
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -101,8 +102,13 @@ class BuildCityscapesDataTest(tf.test.TestCase):
 
 
 class BuildCityscapesDataDaskTest(BuildCityscapesDataTest):
-  """Tests dask method of converting Cityscapes images to TFRecords"""
+  """Tests dask method of conversion"""
   module = build_cityscapes_data_dask
+
+
+class BuildCityscapesDataDaskImageSizeTest(BuildCityscapesDataTest):
+  """Tests dask + imagesize method of conversion"""
+  module = build_cityscapes_data_dask_imagesize
 
 
 if __name__ == '__main__':
