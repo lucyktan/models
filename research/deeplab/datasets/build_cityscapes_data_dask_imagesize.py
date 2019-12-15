@@ -136,9 +136,26 @@ def _get_image_dimensions(path):
     path: Path to the image file.
 
   Returns:
-    A numpy array with the height and width of the image.
+    A numpy array with the width and height of the image.
   """
   return np.array(imagesize.get(path))
+
+
+def _get_dimensions_frame(filenames):
+  """Gets the dimensions of the images at the given paths.
+
+  Args:
+    filenames: List of paths to image files.
+
+  Returns:
+    A dask DataFrame with the width and height of each image.
+  """
+  image_dims = [_get_image_dimensions(path) for path in filenames]
+  image_dims_array = da.stack(
+      [da.from_delayed(dims, dtype=int, shape=(2,)) for dims in image_dims],
+      axis=0)
+  return dd.from_dask_array(
+      image_dims_array, columns=['width', 'height'])
 
 
 @dask.delayed(pure=True)
@@ -233,20 +250,10 @@ def _convert_dataset(dataset_split):
   ddf['img_data'] = _get_bytes_series(image_files)
   ddf['seg_data'] = _get_bytes_series(label_files)
 
-  image_dims = [_get_image_dimensions(path) for path in image_files]
-  label_dims = [_get_image_dimensions(path) for path in label_files]
-  image_dims_array = da.stack(
-      [da.from_delayed(dims, dtype=int, shape=(2,)) for dims in image_dims],
-      axis=0)
-  label_dims_array = da.stack(
-      [da.from_delayed(dims, dtype=int, shape=(2,)) for dims in label_dims],
-      axis=0)
-  image_dims_ddf = dd.from_dask_array(
-      image_dims_array, columns=['image_width', 'image_height'])
-  label_dims_ddf = dd.from_dask_array(
-      label_dims_array, columns=['label_width', 'label_height'])
-  ddf[['image_height', 'image_width']] = image_dims_ddf[['image_height', 'image_width']]
-  ddf[['label_height', 'label_width']] = label_dims_ddf[['label_height', 'label_width']]
+  image_dims_ddf = _get_dimensions_frame(image_files)
+  label_dims_ddf = _get_dimensions_frame(label_files)
+  ddf[['image_height', 'image_width']] = image_dims_ddf[['height', 'width']]
+  ddf[['label_height', 'label_width']] = label_dims_ddf[['height', 'width']]
 
   ddf['mismatched_shapes'] = ((ddf['image_width'] != ddf['label_width']) |
                               (ddf['image_height'] != ddf['label_height']))
