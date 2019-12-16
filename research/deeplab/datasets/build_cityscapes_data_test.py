@@ -9,6 +9,7 @@ import tensorflow as tf
 import build_cityscapes_data
 import build_cityscapes_data_dask
 import build_cityscapes_data_dask_imagesize
+import build_cityscapes_data_dask_only_delayed
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -109,6 +110,11 @@ class BuildCityscapesDataDaskTest(BuildCityscapesDataTest):
 class BuildCityscapesDataDaskImageSizeTest(BuildCityscapesDataTest):
   """Tests dask + imagesize method of conversion"""
   module = build_cityscapes_data_dask_imagesize
+
+
+class BuildCityscapesDataDaskOnlyDelayedTest(BuildCityscapesDataTest):
+  """Tests dask only delayed method of conversion"""
+  module = build_cityscapes_data_dask_only_delayed
 
 
 if __name__ == '__main__':
