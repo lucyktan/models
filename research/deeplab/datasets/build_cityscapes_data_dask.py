@@ -70,6 +70,11 @@ import re
 import sys
 import build_cityscapes_data_flags
 import build_data
+import dask
+import dask.array as da
+import dask.dataframe as dd
+import numpy as np
+import pandas as pd
 from six.moves import range
 import tensorflow as tf
 
@@ -122,6 +127,83 @@ def _get_files(data, dataset_split):
   return sorted(filenames)
 
 
+def _get_image_dimensions(image_data, reader):
+  """Gets the dimensions of the image.
+
+  Args:
+    image_data: pandas Series with raw bytes of the image file.
+    reader: build_data.ImageReader for parsing the dimensions of the image.
+
+  Returns:
+    A pandas DataFrame with the height and width of the image.
+  """
+  height, width = reader.read_image_dims(image_data.values[0])
+  data = {'height': [height], 'width': [width]}
+  return pd.DataFrame(data, index=image_data.index)
+
+
+@dask.delayed(pure=True)
+def _get_image_data(path):
+  """Gets the raw bytes of the given image path.
+
+  Note that it returns a numpy array so it can be read into dask.
+
+  Args:
+    path: Path to the image file.
+
+  Returns:
+    A numpy array with a single element as the raw bytes of the image.
+  """
+  return np.array(tf.gfile.FastGFile(path, 'rb').read())
+
+
+def _get_bytes_series(filenames):
+  """Gets the raw bytes of the given image paths.
+
+  Args:
+    filenames: List of paths to image files.
+
+  Returns:
+    A dask Series with the raw bytes of each image.
+  """
+  # Note that using np.bytes_ as the dtype results in it becoming S1, which
+  # would truncate it to only the first byte of each file.
+  byte_data_arrays = [
+      da.from_delayed(_get_image_data(path), dtype=object, shape=())
+      for path in filenames
+  ]
+  byte_data = da.stack(byte_data_arrays, axis=0)
+  return dd.from_dask_array(byte_data, columns='data')
+
+
+def _create_tf_record(record):
+  """Creates a serialized TFRecord.
+
+  Args:
+    record: Pandas Series of data needed to construct a TFRecord.
+
+  Returns:
+    Bytes representing the serialized TFRecord.
+  """
+  return build_data.image_seg_to_tfexample(
+      record['img_data'], record['filename'], record['image_height'],
+      record['image_width'], record['seg_data']).SerializeToString()
+
+
+def _convert_to_record(df):
+  """Gets the serialized TFRecord and if there are mismatched shapes.
+
+  Args:
+    df: Pandas DataFrame to create a TFRecord from.
+
+  Returns:
+    A pandas DataFrame containing the serialized TFRecord and an indicator for
+    if there are mismatched shapes.
+  """
+  df['record'] = df.apply(_create_tf_record, axis=1)
+  return df[['record', 'mismatched_shapes']]
+
+
 def _convert_dataset(dataset_split):
   """Converts the specified dataset split to TFRecord format.
 
@@ -141,6 +223,43 @@ def _convert_dataset(dataset_split):
   image_reader = build_data.ImageReader('png', channels=3)
   label_reader = build_data.ImageReader('png', channels=1)
 
+  image_file_array = np.char.array(
+      list(map(lambda f: os.path.basename(f), image_files)))
+  pattern = '%s.%s' % (_POSTFIX_MAP['image'], _DATA_FORMAT_MAP['image'])
+  bad_images = image_file_array[~image_file_array.endswith(pattern)]
+  if bad_images.size:
+    raise RuntimeError('Invalid image filenames: %s' % bad_images)
+
+  # Remove the ending pattern to match the filename used in the original code.
+  ddf = dd.from_array(image_file_array).str[:-len(pattern)].to_frame(
+      name='filename')
+
+  ddf['img_data'] = _get_bytes_series(image_files)
+  ddf['seg_data'] = _get_bytes_series(label_files)
+
+  ddf[['image_height', 'image_width']] = ddf['img_data'].map_partitions(
+      _get_image_dimensions,
+      reader=image_reader,
+      meta={
+          'height': np.int64,
+          'width': np.int64
+      })
+
+  ddf[['label_height', 'label_width']] = ddf['seg_data'].map_partitions(
+      _get_image_dimensions,
+      reader=label_reader,
+      meta={
+          'height': np.int64,
+          'width': np.int64
+      })
+
+  ddf['mismatched_shapes'] = ((ddf['image_width'] != ddf['label_width']) |
+                              (ddf['image_height'] != ddf['label_height']))
+
+  records = ddf.map_partitions(
+      _convert_to_record,
+      meta=[('record', object), ('mismatched_shapes', np.bool_)])
+
   for shard_id in range(_NUM_SHARDS):
     shard_filename = '%s-%05d-of-%05d.tfrecord' % (
         dataset_split, shard_id, _NUM_SHARDS)
@@ -148,26 +267,14 @@ def _convert_dataset(dataset_split):
     with tf.python_io.TFRecordWriter(output_filename) as tfrecord_writer:
       start_idx = shard_id * num_per_shard
       end_idx = min((shard_id + 1) * num_per_shard, num_images)
+      cur_records = records.loc[start_idx:end_idx - 1].compute()
+      if cur_records['mismatched_shapes'].any():
+        raise RuntimeError('Shape mismatched between image and label.')
       for i in range(start_idx, end_idx):
         sys.stdout.write('\r>> Converting image %d/%d shard %d' % (
             i + 1, num_images, shard_id))
         sys.stdout.flush()
-        # Read the image.
-        image_data = tf.gfile.FastGFile(image_files[i], 'rb').read()
-        height, width = image_reader.read_image_dims(image_data)
-        # Read the semantic segmentation annotation.
-        seg_data = tf.gfile.FastGFile(label_files[i], 'rb').read()
-        seg_height, seg_width = label_reader.read_image_dims(seg_data)
-        if height != seg_height or width != seg_width:
-          raise RuntimeError('Shape mismatched between image and label.')
-        # Convert to tf example.
-        re_match = _IMAGE_FILENAME_RE.search(image_files[i])
-        if re_match is None:
-          raise RuntimeError('Invalid image filename: ' + image_files[i])
-        filename = os.path.basename(re_match.group(1))
-        example = build_data.image_seg_to_tfexample(
-            image_data, filename, height, width, seg_data)
-        tfrecord_writer.write(example.SerializeToString())
+        tfrecord_writer.write(cur_records['record'][i])
     sys.stdout.write('\n')
     sys.stdout.flush()
 

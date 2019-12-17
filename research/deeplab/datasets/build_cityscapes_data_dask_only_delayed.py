@@ -70,6 +70,7 @@ import re
 import sys
 import build_cityscapes_data_flags
 import build_data
+import dask
 from six.moves import range
 import tensorflow as tf
 
@@ -122,6 +123,38 @@ def _get_files(data, dataset_split):
   return sorted(filenames)
 
 
+@dask.delayed(pure=True)
+def _convert_record(image_file, label_file, image_reader, label_reader):
+  """Converts a single image and label to a serialized TFRecord.
+
+  Args:
+    image_file: Path to image.
+    label_file: Path to label.
+    image_reader: build_data.ImageReader for parsing the dimensions of the
+      image.
+    label_reader: build_data.ImageReader for parsing the dimensions of the
+      label.
+
+  Returns:
+    Bytes representing a serialized TFRecord for this image and label.
+  """
+  image_data = tf.gfile.FastGFile(image_file, 'rb').read()
+  height, width = image_reader.read_image_dims(image_data)
+  # Read the semantic segmentation annotation.
+  seg_data = tf.gfile.FastGFile(label_file, 'rb').read()
+  seg_height, seg_width = label_reader.read_image_dims(seg_data)
+  if height != seg_height or width != seg_width:
+    raise RuntimeError('Shape mismatched between image and label.')
+  # Convert to tf example.
+  re_match = _IMAGE_FILENAME_RE.search(image_file)
+  if re_match is None:
+    raise RuntimeError('Invalid image filename: ' + image_file)
+  filename = os.path.basename(re_match.group(1))
+  example = build_data.image_seg_to_tfexample(image_data, filename, height,
+                                              width, seg_data)
+  return example.SerializeToString()
+
+
 def _convert_dataset(dataset_split):
   """Converts the specified dataset split to TFRecord format.
 
@@ -141,6 +174,11 @@ def _convert_dataset(dataset_split):
   image_reader = build_data.ImageReader('png', channels=3)
   label_reader = build_data.ImageReader('png', channels=1)
 
+  delayed_tasks = [
+      _convert_record(image_file, label_file, image_reader, label_reader)
+      for image_file, label_file in zip(image_files, label_files)
+  ]
+
   for shard_id in range(_NUM_SHARDS):
     shard_filename = '%s-%05d-of-%05d.tfrecord' % (
         dataset_split, shard_id, _NUM_SHARDS)
@@ -148,26 +186,12 @@ def _convert_dataset(dataset_split):
     with tf.python_io.TFRecordWriter(output_filename) as tfrecord_writer:
       start_idx = shard_id * num_per_shard
       end_idx = min((shard_id + 1) * num_per_shard, num_images)
+      cur_records = dask.compute(*delayed_tasks[start_idx:end_idx])
       for i in range(start_idx, end_idx):
         sys.stdout.write('\r>> Converting image %d/%d shard %d' % (
             i + 1, num_images, shard_id))
         sys.stdout.flush()
-        # Read the image.
-        image_data = tf.gfile.FastGFile(image_files[i], 'rb').read()
-        height, width = image_reader.read_image_dims(image_data)
-        # Read the semantic segmentation annotation.
-        seg_data = tf.gfile.FastGFile(label_files[i], 'rb').read()
-        seg_height, seg_width = label_reader.read_image_dims(seg_data)
-        if height != seg_height or width != seg_width:
-          raise RuntimeError('Shape mismatched between image and label.')
-        # Convert to tf example.
-        re_match = _IMAGE_FILENAME_RE.search(image_files[i])
-        if re_match is None:
-          raise RuntimeError('Invalid image filename: ' + image_files[i])
-        filename = os.path.basename(re_match.group(1))
-        example = build_data.image_seg_to_tfexample(
-            image_data, filename, height, width, seg_data)
-        tfrecord_writer.write(example.SerializeToString())
+        tfrecord_writer.write(cur_records[i - start_idx])
     sys.stdout.write('\n')
     sys.stdout.flush()
 
